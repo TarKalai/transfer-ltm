@@ -1,0 +1,9 @@
+name: base_pool_learned
+description: model of run "base", attention head trained on the label
+from_run: base
+embeddings:
+  pooling: learned
+  history_window: 32
+  head_fraction: 0.5
+  head_max_negatives: 100000
+  head_seed: 0

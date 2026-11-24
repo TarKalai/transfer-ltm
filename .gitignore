@@ -1,0 +1,25 @@
+# Private bank transfer data and everything derived from it. Corpora,
+# tokenizer vocabularies and embeddings all carry information about the source
+# records, so the whole data/ tree is ignored rather than a listed subset --
+# an extract dropped anywhere under it must not be committable by accident.
+data/
+
+# Checkpoints trained on that data carry it too.
+models/
+
+# Environment: dependencies are managed with uv (pyproject.toml + uv.lock).
+.venv/
+requirements.txt
+
+# Local notes, not part of the code (they may hold results or data facts).
+HANDOFF.md
+docs/run.md
+docs/backlog.md
+.claude/
+
+# Python / Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+tmp_nb_rerun_results/
+tmp_nb_test_results/

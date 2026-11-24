@@ -1,0 +1,38 @@
+# Reference run: every other experiment changes one thing relative to this.
+# Keys and allowed values: docs/experiments.md.
+name: base
+description: tiny model (~1M weights), customer scope, rare_bins tail, no text, EMP dropped, mean pooling
+
+tokenizer:
+  sequence_scope: customer
+  include_account_time_delta: true
+  drop_fields: [EMP]
+  tail_strategy: rare_bins
+  tail_min_count: 10
+  text_strategy: null
+
+# Pretraining (notebook 03). Dotted keys of configs/pretrain_bank_decoder.yaml.
+# Model: tiny (64 wide, 4 layers, ~1M weights; most of them the token embeddings),
+# the default since 2026-11-13. The former base (~31M weights, the config's own
+# size) is the experiment model_31m.
+training:
+  model.config.hidden_size: 64
+  model.config.num_hidden_layers: 4
+  model.config.num_attention_heads: 4
+  model.config.num_key_value_heads: 2
+  model.config.intermediate_size: 176
+  step_scheduler.max_steps: 2000
+  step_scheduler.global_batch_size: 128
+  step_scheduler.local_batch_size: 32
+  model.gradient_checkpointing: true
+  lr_scheduler.lr_warmup_steps: 100
+  step_scheduler.val_every_steps: 100
+  step_scheduler.val_batches: 100
+  step_scheduler.ckpt_every_steps: 250
+  checkpoint.keep_last_n: 3
+
+embeddings:
+  pooling: mean
+  history_window: 32
+
+xgboost: {}

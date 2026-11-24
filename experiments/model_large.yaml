@@ -1,0 +1,11 @@
+# Model size: 768 wide, 12 layers (~3x model_31m). The memory probe
+# adapts the per-step batch on the L40S.
+base: base.yaml
+name: model_large
+description: base with a large model (768 wide, 12 layers)
+training:
+  model.config.hidden_size: 768
+  model.config.num_hidden_layers: 12
+  model.config.num_attention_heads: 12
+  model.config.num_key_value_heads: 4
+  model.config.intermediate_size: 2048

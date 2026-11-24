@@ -1,0 +1,8 @@
+# Pooling variants reuse a finished run's tokenizer and model (from_run):
+# only notebooks 04 and 05 run. They must not set tokenizer/training/schema.
+name: base_pool_last_txn
+description: model of run "base", last_txn pooling
+from_run: base
+embeddings:
+  pooling: last_txn
+  history_window: 32

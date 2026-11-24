@@ -1,0 +1,7 @@
+base: early_stop.yaml
+name: text_category
+description: early_stop plus the description text, "category" strategy (whole cleaned string)
+schema:
+  description: transaction_comment
+tokenizer:
+  text_strategy: category

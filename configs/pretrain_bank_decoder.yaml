@@ -1,0 +1,275 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Bank Transfer Foundation Model Pretraining — Decoder-Only
+#
+# For the bank-transfer schema (BankTransferTokenizerPipeline).
+#
+# TRAINER: this config is consumed by src/train_decoder.py (plain PyTorch), not
+# by NeMo AutoModel — see notebook 03 and the module docstring for why. Sections
+# marked "[NeMo only]" below are ignored by that loop; they are retained so the
+# config still documents the upstream setup.
+#
+# This file is the single source of truth for the bank run. Anything run-specific
+# (corpus paths, fitted vocab_size, step counts) is passed as a
+# --section.key value override, not edited in here.
+#
+# Differences vs the TabFormer config:
+#   - dataset._target_ is build_bank_clm_dataset and takes vocab_path: the
+#     bank tokenizer's vocabulary is FITTED on the training split, so corpus
+#     and model must share the vocab.json written by notebook 02.
+#   - 15 tokens per transaction (12 for TabFormer) -> ~255 transactions per
+#     4096-token sequence. One sequence per customer by default, with all of
+#     the customer's accounts interleaved chronologically.
+#   - vocab_size below is the *upper bound* implied by the default vocabulary
+#     caps in BankTokenizerConfig. Notebook 02 prints the exact fitted size;
+#     pass it with --model.config.vocab_size <N> for a slightly smaller
+#     embedding table. A vocab_size larger than the tokenizer's is harmless
+#     (unused rows); smaller is fatal (index out of range).
+#
+# Launch:
+#
+#   1. Multi-GPU (recommended):
+#      torchrun --nproc-per-node=8 scripts/train_bank_decoder.py \
+#          -c configs/pretrain_bank_decoder.yaml \
+#          --dataset.data_path data/bank/decoder_corpus/train_corpus.txt \
+#          --dataset.vocab_path data/bank/tokenizer/vocab.json \
+#          --validation_dataset.data_path data/bank/decoder_corpus/val_corpus.txt \
+#          --validation_dataset.vocab_path data/bank/tokenizer/vocab.json \
+#          --model.config.vocab_size <fitted vocab size from notebook 02>
+#
+#   2. Single GPU (testing):
+#      python scripts/train_bank_decoder.py \
+#          -c configs/pretrain_bank_decoder.yaml \
+#          --dataset.data_path data/bank/decoder_corpus/train_corpus.txt \
+#          --dataset.vocab_path data/bank/tokenizer/vocab.json
+#
+#   3. In-process, with a loss curve: notebook 03.
+
+# -- Model ----------------------------------------------------------------
+# model._target_ is [NeMo only]; src/train_decoder.py always uses
+# transformers.AutoModelForCausalLM.from_config and reads the architecture from
+# model.config._target_ below.
+model:
+  _target_: nemo_automodel.NeMoAutoModelForCausalLM.from_config
+
+  # -- memory knobs (read by src/train_decoder.py) --
+  # At seq_length 4096 the stored activations across 8 layers, not the logits,
+  # are what fills the card. Reference points on a 44 GB L40S at vocab ~7,966:
+  #   local_batch 32, no checkpointing -> OOM (~40 GB); the fp32 logit upcast
+  #                                       alone is 3.89 GB
+  #   local_batch  8, no checkpointing -> ~10-12 GB
+  #   local_batch 32, checkpointing    -> fits, and usually faster than
+  #                                       local_batch 8 with 16 accumulation
+  #                                       steps despite the recompute
+  # global_batch_size is held constant by accumulation either way, so changing
+  # local_batch_size never changes the optimizer math.
+  # llama | qwen2 | mistral | gpt2 | modernbert (src/architectures.py). The size
+  # below is written in Llama's terms and translated, so every architecture gets
+  # the same size. Trained from scratch: no pretrained text weights are used.
+  architecture: llama
+  # clm: next-token prediction (a decoder: llama, qwen2, mistral, gpt2).
+  # mlm: masked-token prediction (an encoder: modernbert); settings in `mlm:` below.
+  objective: clm
+  gradient_checkpointing: false   # true trades ~30% compute for activations
+  attn_implementation: sdpa       # never "eager": it materialises a
+                                  # (batch, heads, seq, seq) score matrix,
+                                  # 8.6 GB per layer at 32 x 8 x 4096 x 4096
+  config:
+    _target_: transformers.LlamaConfig
+    vocab_size: 8232              # upper bound for the default tokenizer caps
+    hidden_size: 512
+    num_hidden_layers: 8
+    num_attention_heads: 8
+    num_key_value_heads: 2        # GQA: 4:1 ratio (8 Q heads, 2 KV heads)
+    intermediate_size: 1408       # SwiGLU FFN
+    max_position_embeddings: 8192 # RoPE allows extrapolation beyond this
+    rope_theta: 500000.0
+    hidden_act: silu
+    rms_norm_eps: 1.0e-5
+    attention_dropout: 0.0
+    tie_word_embeddings: false
+    bos_token_id: 1
+    eos_token_id: 2
+    pad_token_id: 0
+
+# -- Loss weights ----------------------------------------------------------
+# Weight on the training loss per field (token prefix), e.g. {AMT: 2.0, CPTY: 2.0}:
+# the fields that matter for fraud count more. Others weigh 1.0. Validation loss
+# stays unweighted. Empty = the plain causal-LM loss.
+loss_weights: {}
+
+# -- Masked-token prediction (model.objective: mlm only) ---------------------
+# mask_unit token: each field token hidden with probability mask_prob (BERT).
+# mask_unit transaction: each transfer hidden whole (all its fields) with
+# probability mask_prob, so it must be rebuilt from the transfers around it.
+# A hidden position is <mask> 80% of the time, a random token 10%, unchanged 10%.
+# Validation uses fixed masks (val_mask_seed): the same at every validation.
+mlm:
+  mask_prob: 0.15
+  mask_unit: token
+  val_mask_seed: 1234
+
+# -- Training Dataset -----------------------------------------------------
+dataset:
+  _target_: src/clm_data.py:build_bank_clm_dataset
+  data_path: null
+  vocab_path: data/bank/tokenizer/vocab.json
+  seq_length: 4096
+  # Kept in the input, excluded from the loss. <sep> recurs every T+1 positions,
+  # so after a few transactions it costs nothing to predict and only dilutes the
+  # averaged loss. Note: this makes the reported loss NOT comparable with runs
+  # that trained on <sep> -- compare the per-field diagnostic instead. [] = off.
+  loss_ignore_tokens: ["<sep>"]
+
+# [NeMo only] — src/train_decoder.py uses torch.utils.data.DataLoader and reads
+# only dataloader.num_workers (default 0) from this section.
+dataloader:
+  _target_: torchdata.stateful_dataloader.StatefulDataLoader
+  collate_fn: torch.utils.data.default_collate
+
+# -- Validation Dataset ----------------------------------------------------
+validation_dataset:
+  _target_: src/clm_data.py:build_bank_clm_dataset
+  data_path: null
+  vocab_path: data/bank/tokenizer/vocab.json
+  seq_length: 4096
+  loss_ignore_tokens: ["<sep>"]   # keep identical to dataset.loss_ignore_tokens
+
+# [NeMo only] — see the note on `dataloader`.
+validation_dataloader:
+  _target_: torchdata.stateful_dataloader.StatefulDataLoader
+  collate_fn: torch.utils.data.default_collate
+
+# -- Training Schedule -----------------------------------------------------
+# Demo settings (1 GPU): 30 steps is enough to see the loss drop from
+# ln(vocab_size) ~ 8.9 toward ~5-6. Raise max_steps for a real run.
+#
+# global_batch_size is what the optimizer sees; local_batch_size is what one GPU
+# holds. src/train_decoder.py derives
+#     accum_steps = global_batch_size / (local_batch_size * world_size)
+# and errors out if that is not exact — so lowering local_batch_size to fit
+# memory does not change the optimizer math.
+step_scheduler:
+  global_batch_size: 16
+  local_batch_size: 16
+  ckpt_every_steps: 15
+  val_every_steps: 15
+  num_epochs: 20
+  max_steps: 30
+  auto_fit_batch: true          # halve local_batch_size until a step fits the GPU
+  # Early stopping (0 = off). Stop once the validation loss has not improved by more
+  # than early_stop_min_delta for early_stop_patience validations in a row; max_steps
+  # is then only a ceiling. With it on, the lr stays constant after warmup and decays
+  # linearly to min_lr over early_stop_cooldown_steps before stopping (lr_decay_style
+  # is ignored): a cosine tied to max_steps would leave an early stop at a high lr.
+  early_stop_patience: 0
+  early_stop_min_delta: 0.0
+  early_stop_cooldown_steps: 0
+  # val_batches: 50           # cap the validation pass. NOT the first N batches:
+                              # the corpus is customer-sorted, so a prefix would
+                              # be a systematic slice. src/train_decoder.py draws
+                              # a seeded random subset of this size once, and
+                              # reuses it at every validation.
+
+# -- Distribution ----------------------------------------------------------
+# [NeMo only] — src/train_decoder.py reads dist_env.backend and otherwise uses
+# DistributedDataParallel when torchrun sets WORLD_SIZE > 1. At ~29M parameters
+# the model, gradients and optimizer state fit on one device many times over, so
+# FSDP2 sharding would only add communication.
+dist_env:
+  backend: nccl
+  timeout_minutes: 5
+
+distributed:
+  _target_: nemo_automodel.components.distributed.fsdp2.FSDP2Manager
+  dp_size: none
+  dp_replicate_size: 1
+  tp_size: 1
+  cp_size: 1
+  sequence_parallel: false
+
+# -- Loss ------------------------------------------------------------------
+# [NeMo only] — HuggingFace causal LMs compute masked cross-entropy internally
+# from `labels`, using the -100 ignore convention that FinancialCLMDataset
+# already writes at pad positions.
+loss_fn:
+  _target_: nemo_automodel.components.loss.masked_ce.MaskedCrossEntropy
+
+# -- Optimizer -------------------------------------------------------------
+optimizer:
+  _target_: torch.optim.AdamW
+  betas: [0.9, 0.95]
+  lr: 0.0002
+  weight_decay: 0.077
+  clip_grad_norm: 1.0          # consumed by src/train_decoder.py, not by AdamW
+
+lr_scheduler:
+  lr_decay_style: cosine
+  lr_warmup_steps: 10
+  min_lr: 0.0000065
+
+# -- Diagnostics -----------------------------------------------------------
+# Per-field-position validation loss. The corpus is periodic -- <bos> then
+# [T field tokens, <sep>] repeated -- so bucketing the per-token loss by
+# (position - offset) % period gives one number per tokenizer step.
+#
+# Why it matters: the aggregate loss falls steeply early on mostly because the
+# model learns the *schema* -- <sep> recurs every T+1 positions, and direction /
+# sign / flags are near-constant. Those are cheap. What decides whether the
+# embeddings carry signal is the high-cardinality fields (counterparty bucket,
+# amount bin, time gap). This breakdown separates the two.
+#
+# field_loss_period must be tokens_per_transaction + 1 (the +1 is <sep>).
+# Notebook 03 sets it from corpus_report.json; leave it null to disable.
+diagnostics:
+  field_loss_period: null       # e.g. 17 for T=16; null disables the diagnostic
+  field_loss_offset: 1          # position 0 is <bos>
+  field_loss_batches: 20        # validation batches contributing (fp32 CE is the cost)
+  field_loss_row_chunk: 4       # rows per fp32 upcast; lower if it OOMs
+
+# -- RNG -------------------------------------------------------------------
+# _target_ is [NeMo only]; `seed` and `ranked` are honoured either way (ranked
+# adds the process rank to the seed so ranks draw different shuffles).
+rng:
+  _target_: nemo_automodel.components.training.rng.StatefulRNG
+  seed: 42
+  ranked: true
+
+# -- Checkpointing ---------------------------------------------------------
+# src/train_decoder.py writes checkpoint_dir/step_<N>/ with save_pretrained():
+# config.json + model.safetensors, the same layout save_consolidated produced,
+# which is what notebook 04 loads with AutoModelForCausalLM.from_pretrained.
+# model_save_format and save_consolidated are therefore descriptive only.
+#
+# A training_state.json is written *after* the weights, and discovery keys on
+# it: save_pretrained emits config.json first, so a save killed mid-write (a
+# full disk) would otherwise leave a directory that looks loadable but holds
+# truncated weights. A failed save is warned about, not fatal — the partial
+# directory is deleted and training continues.
+#
+# At ~31M parameters a checkpoint is ~120 MB. Point checkpoint_dir at a mount
+# with room (on Domino, a persistent dataset rather than the synced project
+# directory) and use keep_last_n to bound total usage.
+checkpoint:
+  enabled: true
+  checkpoint_dir: models/bank-decoder/checkpoints/
+  model_save_format: safetensors
+  save_consolidated: true
+  model_repo_id: custom-bank-transfer-decoder
+  keep_last_n: 3                # oldest beyond this are deleted; null = keep all
+  overwrite: false              # true: delete step_* left by an earlier run first
+  save_best: true               # also checkpoint whenever validation improves;
+                                # the best and the final step are never pruned

@@ -1,0 +1,6 @@
+name: base_window_16
+description: model of run "base", mean pooling over a 16-transfer window
+from_run: base
+embeddings:
+  pooling: mean
+  history_window: 16

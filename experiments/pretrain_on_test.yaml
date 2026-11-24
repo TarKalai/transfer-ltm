@@ -1,0 +1,9 @@
+# The test period's sequences added to the pretraining corpus (no labels are used in
+# pretraining). Validation (early stop) stays on the val period. The model has then seen
+# the test period: fine for the customer task (notebook 07); notebook 05's test scores
+# are no longer on unseen transfers. Compare with early_stop (the only difference).
+base: early_stop.yaml
+name: pretrain_on_test
+description: early_stop pretrained on train + test periods (val held out for the early stop)
+corpus:
+  pretrain_on_test: true

@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Fixed-vocabulary tokenizer for bounded integer fields.
+
+Maps integer values from a known range to token strings like "HOUR_09",
+"ZIP3_100", "CUST_42".  No data-driven fitting — the vocabulary is fully
+determined by (prefix, min_val, max_val, pad_width).
+
+Used for: HOUR (0-23), DOW (0-6), MONTH (1-12), CARD (0-9),
+          ZIP3 (0-999), CUST (0-2999).
+
+``zero_based_index``
+    The pipeline assigns global token IDs as ``local_index + step_offset`` and
+    advances the offset by the step's vocabulary size, which assumes local
+    indices run ``0..vocab_size-1``.  By default this tokenizer keys its
+    vocabulary by the *value* (so MONTH, with ``min_val=1``, uses local indices
+    1..12 and overruns its slot by one, colliding with the first token of the
+    next step).  ``zero_based_index=True`` shifts local indices to start at 0,
+    which is correct for any ``min_val``.
+
+    It is off by default only because switching it changes the global ID of
+    every token in and after such a step: the card-transaction checkpoint of NVIDIA's
+    blueprint was trained with the old numbering, so flipping it there would
+    silently invalidate that checkpoint.  New pipelines
+    (e.g. ``BankTransferTokenizerPipeline``) pass ``True``.
+"""
+
+import cudf
+import cupy as cp
+
+from .base import BaseTokenizer
+
+
+class FixedVocabTokenizer(BaseTokenizer):
+    """Token = ``{prefix}_{value:0{pad_width}d}`` for every integer in range."""
+
+    def __init__(
+        self,
+        prefix: str,
+        min_val: int = 0,
+        max_val: int = 23,
+        pad_width: int = 0,
+        stream: cp.cuda.Stream = None,
+        zero_based_index: bool = False,
+    ):
+        super().__init__()
+        self.prefix = prefix
+        self.min_val = min_val
+        self.max_val = max_val
+        self.pad_width = pad_width
+        self.stream = stream
+        self.zero_based_index = zero_based_index
+        self._vocab_built = False
+
+    @property
+    def _index_shift(self) -> int:
+        return self.min_val if self.zero_based_index else 0
+
+    def build_vocab(self, column_data=None) -> None:
+        shift = self._index_shift
+        self._idx_to_token = {
+            i - shift: f"{self.prefix}_{i:0{self.pad_width}d}"
+            for i in range(self.min_val, self.max_val + 1)
+        }
+        self._vocab_built = True
+
+    def tokenize(self, column_data) -> cudf.Series:
+        """*column_data* must be an integer cudf.Series within [min_val, max_val]."""
+        int_vals = column_data.astype("int32").clip(self.min_val, self.max_val)
+        if self.zero_based_index and self.min_val:
+            int_vals = int_vals - self.min_val
+        return int_vals.map(self._idx_to_token)
+
+    def __repr__(self) -> str:
+        status = "built" if self._vocab_built else "not built"
+        return (
+            f"FixedVocabTokenizer(prefix={self.prefix}, "
+            f"range=[{self.min_val},{self.max_val}], {status})"
+        )
+
+    # -- serialization -----------------------------------------------------
+
+    def _get_init_params(self) -> dict:
+        return {
+            "prefix": self.prefix,
+            "min_val": self.min_val,
+            "max_val": self.max_val,
+            "pad_width": self.pad_width,
+            "stream": None,
+            "zero_based_index": self.zero_based_index,
+        }
+
+    def _get_fitted_state(self) -> dict:
+        return {"_vocab_built": self._vocab_built}
+
+    def _set_fitted_state(self, state: dict) -> None:
+        self._vocab_built = state.get("_vocab_built", False)

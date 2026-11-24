@@ -1,0 +1,10 @@
+# Fine-tuning on the label (src/finetune.py); kept only if it beats the head alone.
+name: base_ft_top2
+description: model of run "base", last 2 layers fine-tuned with the attention head
+from_run: base
+embeddings:
+  pooling: learned
+  history_window: 32
+  finetune: top:2
+  finetune_lr: 1.0e-5
+  finetune_epochs: 3

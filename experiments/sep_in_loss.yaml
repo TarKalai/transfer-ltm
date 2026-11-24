@@ -1,0 +1,8 @@
+# Ablation: <sep> back in the loss (the behaviour before Tier 2). Loss values are
+# not comparable with base -- compare per-field losses and notebook 05 metrics.
+base: base.yaml
+name: sep_in_loss
+description: base with <sep> predicted again (loss_ignore_tokens empty)
+training:
+  dataset.loss_ignore_tokens: []
+  validation_dataset.loss_ignore_tokens: []

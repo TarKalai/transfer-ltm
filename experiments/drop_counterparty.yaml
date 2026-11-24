@@ -1,0 +1,5 @@
+base: base.yaml
+name: drop_counterparty
+description: base without counterparty account, bank and country
+tokenizer:
+  drop_fields: [EMP, CPTY, BIC, CTRY]

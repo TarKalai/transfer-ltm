@@ -1,0 +1,6 @@
+# Resolution of the amount token: twice finer (quantile bins fitted on train).
+base: base.yaml
+name: amount_bins_64
+description: base with 64 amount bins instead of 32
+tokenizer:
+  amount_bins: 64

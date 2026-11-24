@@ -1,0 +1,5 @@
+base: base.yaml
+name: amount_bins_16
+description: base with 16 amount bins instead of 32
+tokenizer:
+  amount_bins: 16

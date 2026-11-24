@@ -1,0 +1,6 @@
+base: base.yaml
+name: amt_relative
+description: base plus the amount relative to the sequence's own past (AMTREL token)
+tokenizer:
+  include_relative_amount: true
+  relative_amount_bins: 16

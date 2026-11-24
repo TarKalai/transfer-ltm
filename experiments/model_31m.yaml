@@ -1,0 +1,11 @@
+# Model size: the former base (~31M weights, 512 wide, 8 layers; the size in
+# configs/pretrain_bank_decoder.yaml). Does a bigger model than the tiny base help?
+base: base.yaml
+name: model_31m
+description: base with the former base model (512 wide, 8 layers, ~31M weights)
+training:
+  model.config.hidden_size: 512
+  model.config.num_hidden_layers: 8
+  model.config.num_attention_heads: 8
+  model.config.num_key_value_heads: 2
+  model.config.intermediate_size: 1408

@@ -1,0 +1,5 @@
+base: base.yaml
+name: drop_movement
+description: base without movement code, debit/credit and sign
+tokenizer:
+  drop_fields: [EMP, MVC, DC, SIGN]

@@ -1,0 +1,15 @@
+# ============================================================================
+# WHERE THE DATA AND THE RESULTS LIVE -- the only place to set paths.
+#
+# Every notebook and script reads this file. Paths may be absolute
+# (e.g. /mnt/data/my-dataset/bank) or relative to the code folder.
+# ============================================================================
+
+# The raw extract (the transfers table, .parquet or .csv).
+raw_file: data/bank/raw/transfers.parquet
+
+# Prepared data: the train/val/test split and the column schema (notebook 01).
+data_dir: data/bank
+
+# Results: one folder per experiment, plus summary.csv.
+runs_dir: data/runs

@@ -1,0 +1,9 @@
+name: base_ft_full
+description: model of run "base", every weight fine-tuned with the attention head
+from_run: base
+embeddings:
+  pooling: learned
+  history_window: 32
+  finetune: full
+  finetune_lr: 1.0e-5
+  finetune_epochs: 3

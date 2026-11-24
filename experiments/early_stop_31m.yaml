@@ -1,0 +1,11 @@
+# Early stopping with the ~31M model: model size compared at convergence, not at a
+# fixed number of steps (see early_stop.yaml).
+base: early_stop.yaml
+name: early_stop_31m
+description: model_31m trained until the validation loss stops improving (ceiling 20000 steps)
+training:
+  model.config.hidden_size: 512
+  model.config.num_hidden_layers: 8
+  model.config.num_attention_heads: 8
+  model.config.num_key_value_heads: 2
+  model.config.intermediate_size: 1408

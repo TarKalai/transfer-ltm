@@ -1,0 +1,7 @@
+# Field order: the original NVIDIA order (amount first) instead of base's
+# coarse-to-fine order (context, movement, who, amount last). Does the order matter?
+base: base.yaml
+name: field_order_original
+description: base with the original field order (AMT first)
+tokenizer:
+  field_order: null

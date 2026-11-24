@@ -1,0 +1,12 @@
+# Early stopping: base trained until the validation loss stops improving, instead of a
+# fixed 2000 steps (every 2000-step run was still improving at its last step).
+# Stops after 5 validations (500 steps) without an improvement > 0.001, then 500 decay
+# steps; 20000 steps is only a ceiling. lr constant after warmup (no cosine).
+base: base.yaml
+name: early_stop
+description: base trained until the validation loss stops improving (ceiling 20000 steps)
+training:
+  step_scheduler.max_steps: 20000
+  step_scheduler.early_stop_patience: 5
+  step_scheduler.early_stop_min_delta: 0.001
+  step_scheduler.early_stop_cooldown_steps: 500

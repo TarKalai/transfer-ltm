@@ -1,0 +1,6 @@
+base: base.yaml
+name: tail_hash
+description: base with hash-bucket tail
+tokenizer:
+  tail_strategy: hash
+  tail_buckets: 16

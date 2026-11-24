@@ -1,0 +1,5 @@
+base: base.yaml
+name: drop_operational
+description: base without operation status and comment structure
+tokenizer:
+  drop_fields: [EMP, OPST, CMT]

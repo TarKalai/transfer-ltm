@@ -1,0 +1,6 @@
+name: base_pool_mean_surprise
+description: model of run "base", mean pooling plus the surprise features
+from_run: base
+embeddings:
+  pooling: mean+surprise
+  history_window: 32

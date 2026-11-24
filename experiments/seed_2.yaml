@@ -1,0 +1,7 @@
+base: base.yaml
+name: seed_2
+description: base, seed 2 (pretraining and XGBoost)
+training:
+  rng.seed: 2
+xgboost:
+  random_state: 2

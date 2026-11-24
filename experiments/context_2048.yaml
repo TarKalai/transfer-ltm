@@ -1,0 +1,6 @@
+# Shorter pretraining sequences: more, shorter chunks per customer.
+base: base.yaml
+name: context_2048
+description: base pretrained on 2048-token sequences instead of 4096
+corpus:
+  context_window: 2048

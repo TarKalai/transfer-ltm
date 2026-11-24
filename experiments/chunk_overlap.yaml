@@ -1,0 +1,7 @@
+# Overlapping pretraining chunks: each transaction appears in 2 chunks, with
+# different amounts of history before it (train corpus only).
+base: base.yaml
+name: chunk_overlap
+description: base with 2x overlapping pretraining chunks
+corpus:
+  chunk_copies: 2

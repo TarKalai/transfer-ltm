@@ -1,0 +1,7 @@
+# Anomaly profile only: how unexpected the scored transfer is given its history.
+name: base_pool_surprise
+description: model of run "base", surprise (per-field negative log-likelihood) features
+from_run: base
+embeddings:
+  pooling: surprise
+  history_window: 32

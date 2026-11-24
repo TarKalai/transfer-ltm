@@ -1,0 +1,20 @@
+[project]
+name = "transfer-ltm"
+version = "0.1.0"
+description = "Transaction language models on bank-transfer sequences (research code)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ipykernel>=6.29",
+    "ipywidgets==8.1.8",
+    "matplotlib==3.10.7",
+    "nbconvert>=7.16",
+    "pandas==2.2.3",
+    "plotly==6.6.0",
+    "pyarrow>=17.0",
+    "pyyaml==6.0.2",
+    "scikit-learn==1.7.2",
+    "seaborn==0.13.2",
+    "tqdm>=4.66",
+    "xgboost==3.2.0",
+]

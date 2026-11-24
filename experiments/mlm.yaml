@@ -1,0 +1,15 @@
+# Masked-token prediction instead of next-token prediction: an encoder (ModernBERT,
+# same size as early_stop's model) sees both sides of a hidden token. 15% of field
+# tokens hidden per sequence (BERT). Notebooks 04-05/07 unchanged: the embedding
+# windows end at the scored transfer, so nothing after it is seen.
+# Val loss is not comparable with next-token runs: compare in notebooks 05 and 07.
+# Only 15% of positions train each step, so the step ceiling is doubled.
+base: early_stop.yaml
+name: mlm
+description: early_stop with masked-token prediction (ModernBERT encoder, 15% of tokens hidden)
+training:
+  model.architecture: modernbert
+  model.objective: mlm
+  mlm.mask_unit: token
+  mlm.mask_prob: 0.15
+  step_scheduler.max_steps: 40000

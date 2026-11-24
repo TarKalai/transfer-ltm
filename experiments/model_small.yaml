@@ -1,0 +1,10 @@
+# Model size: 256 wide, 4 layers (~7M weights), between the tiny base and model_31m.
+base: base.yaml
+name: model_small
+description: base with a small model (256 wide, 4 layers, ~7M weights)
+training:
+  model.config.hidden_size: 256
+  model.config.num_hidden_layers: 4
+  model.config.num_attention_heads: 4
+  model.config.num_key_value_heads: 2
+  model.config.intermediate_size: 704

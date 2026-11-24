@@ -1,0 +1,8 @@
+# As mlm, but whole transfers are hidden (all their fields, 15% of transfers): the
+# model must rebuild a transfer from the ones around it, not copy from its own other
+# fields (CUSTH, ACCT, calendar). Compare with mlm and early_stop.
+base: mlm.yaml
+name: mlm_txn
+description: mlm hiding 15% of whole transfers instead of 15% of tokens
+training:
+  mlm.mask_unit: transaction

@@ -1,0 +1,5 @@
+base: base.yaml
+name: steps_10000
+description: base pretrained for 10000 steps instead of 2000
+training:
+  step_scheduler.max_steps: 10000

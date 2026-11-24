@@ -1,0 +1,7 @@
+# Leave-one-group-out: which fields does the model rely on? (EMP stays dropped,
+# as in base.) The raw XGBoost arm drops the same fields.
+base: base.yaml
+name: drop_calendar
+description: base without hour, day of week and month
+tokenizer:
+  drop_fields: [EMP, HOUR, DOW, MONTH]

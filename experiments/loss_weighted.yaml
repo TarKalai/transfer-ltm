@@ -1,0 +1,6 @@
+# Pretraining loss weighted towards the fields that matter for fraud.
+base: base.yaml
+name: loss_weighted
+description: base with the amount and counterparty tokens weighted 2x in the training loss
+training:
+  loss_weights: {AMT: 2.0, CPTY: 2.0}

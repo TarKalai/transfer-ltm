@@ -1,0 +1,6 @@
+# Resolution of the time-gap tokens (TDIF, TDIFA): twice as many log-spaced bins.
+base: base.yaml
+name: tdif_bins_96
+description: base with 96 time-gap bins instead of 48
+tokenizer:
+  time_delta_bins: 96

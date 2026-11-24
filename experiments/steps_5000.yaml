@@ -1,0 +1,6 @@
+# Pretraining length: does a longer run (lower LM loss) give better fraud features?
+base: base.yaml
+name: steps_5000
+description: base pretrained for 5000 steps instead of 2000
+training:
+  step_scheduler.max_steps: 5000

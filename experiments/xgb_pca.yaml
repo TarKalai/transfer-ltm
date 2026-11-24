@@ -1,0 +1,9 @@
+name: base_xgb_pca
+description: model of run "base", embeddings reduced to 64 PCA components before XGBoost
+from_run: base
+embeddings:
+  pooling: mean
+  history_window: 32
+xgboost:
+  use_pca: true
+  pca_dim: 64

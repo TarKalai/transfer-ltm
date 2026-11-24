@@ -1,0 +1,6 @@
+# Same size as base, Qwen2 architecture (trained from scratch on our tokens).
+base: base.yaml
+name: arch_qwen2
+description: base with the Qwen2 architecture instead of Llama
+training:
+  model.architecture: qwen2

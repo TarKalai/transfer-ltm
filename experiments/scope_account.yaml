@@ -1,0 +1,6 @@
+base: base.yaml
+name: scope_account
+description: base with one sequence per account instead of per customer
+tokenizer:
+  sequence_scope: account
+  include_account_time_delta: false

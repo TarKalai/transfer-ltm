@@ -1,0 +1,6 @@
+# Most different architecture: LayerNorm, learned positions, GELU, no GQA.
+base: base.yaml
+name: arch_gpt2
+description: base with the GPT-2 architecture instead of Llama
+training:
+  model.architecture: gpt2

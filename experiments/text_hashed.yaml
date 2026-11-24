@@ -1,0 +1,9 @@
+base: early_stop.yaml
+name: text_hashed
+description: early_stop plus the description text, "hashed" strategy (first words, hash buckets)
+schema:
+  description: transaction_comment
+tokenizer:
+  text_strategy: hashed
+  text_slots: 4
+  text_hash_size: 2048

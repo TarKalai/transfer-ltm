@@ -1,0 +1,7 @@
+# Ablation: the original single OTHER token (untrained when caps exceed cardinality).
+base: base.yaml
+name: tail_other
+description: base with tail_strategy=other (original behaviour)
+tokenizer:
+  tail_strategy: other
+  tail_min_count: 1

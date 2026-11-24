@@ -1,0 +1,9 @@
+name: base_ft_lora8
+description: model of run "base", rank-8 LoRA adapters fine-tuned with the attention head
+from_run: base
+embeddings:
+  pooling: learned
+  history_window: 32
+  finetune: lora:8
+  finetune_lr: 1.0e-4
+  finetune_epochs: 3

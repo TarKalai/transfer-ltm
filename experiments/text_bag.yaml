@@ -1,0 +1,8 @@
+base: early_stop.yaml
+name: text_bag
+description: early_stop plus the description text, "bag" strategy (rarest known words), 4 slots
+schema:
+  description: transaction_comment
+tokenizer:
+  text_strategy: bag
+  text_slots: 4

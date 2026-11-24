@@ -1,0 +1,6 @@
+name: base_pool_mean_last_txn
+description: model of run "base", mean and last-transfer pooling concatenated
+from_run: base
+embeddings:
+  pooling: mean+last_txn
+  history_window: 32
