@@ -1,0 +1,11 @@
+# NPPR (Skalski et al. 2023): next transfer prediction + past reconstruction,
+# instead of next-token prediction. Same model as early_stop; only the training
+# objective changes (src/event_objectives.py, settings in nppr: of the config).
+# The early-stop threshold is scaled to the loss: NPPR's loss is a sum over the
+# ~20 fields of a transfer, so 0.001 per token is ~0.02 per transfer.
+base: early_stop.yaml
+name: nppr
+description: early_stop trained with NPPR (next transfer + past reconstruction) instead of next-token
+training:
+  model.objective: nppr
+  step_scheduler.early_stop_min_delta: 0.02

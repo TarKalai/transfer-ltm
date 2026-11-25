@@ -3,7 +3,7 @@
 # the test period: fine for the customer task (notebook 07); notebook 05's test scores
 # are no longer on unseen transfers. Compare with early_stop (the only difference).
 base: early_stop.yaml
-name: pretrain_on_test
-description: early_stop pretrained on train + test periods (val held out for the early stop)
+name: increase_pretrain_data
+description: early_stop pretrained on more data, train + test periods (val held out for the early stop)
 corpus:
   pretrain_on_test: true

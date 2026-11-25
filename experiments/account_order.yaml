@@ -1,8 +1,0 @@
-# The account token as the account's number within its customer (ACCT_01 = first
-# account) instead of a hash bucket. Needs `python scripts/add_account_order.py` once.
-# Trained with early stopping: compare with early_stop (the only difference).
-base: early_stop.yaml
-name: account_order
-description: early_stop with account_token=order (ACCT_01, ACCT_02, ... per customer, not hashed)
-tokenizer:
-  account_token: order

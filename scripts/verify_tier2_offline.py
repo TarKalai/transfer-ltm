@@ -525,6 +525,107 @@ hstate["metadata"]["config"].pop("account_token", None)
 check("a state without account_token reloads as hash",
       BankTransferTokenizerPipeline.from_state(hstate).config.account_token == "hash")
 
+# ------------------------------------- 9. own account as counterparty: same ACCT token
+print("\n9. own_account_counterparty: the counterparty slot reuses the account's ACCT token")
+from src.tokenizer.bank_pipeline import COUNTERPARTY_ORDER_COL  # noqa: E402
+
+check("add_account_order adds counterparty_order when the column is there",
+      COUNTERPARTY_ORDER_COL in ord_raw.columns
+      and COUNTERPARTY_ORDER_COL not in with_order.columns)
+check("outside counterparties -> 0", (ord_raw[COUNTERPARTY_ORDER_COL] == 0).all())
+
+own_raw = raw.copy()
+# Account numbers unique across customers, as in real data (raw reuses A1..A3).
+own_raw["account_number"] = own_raw["customer_id"] + own_raw["account_number"]
+accounts_of = own_raw.groupby("customer_id")["account_number"].agg(lambda s: sorted(set(s)))
+other_cust = {c: next(k for k in accounts_of.index if k != c) for c in accounts_of.index}
+own_rows, foreign_rows = [], []
+for i in own_raw.index[:60]:
+    cust, acct = own_raw.at[i, "customer_id"], own_raw.at[i, "account_number"]
+    others = [a for a in accounts_of[cust] if a != acct]
+    if i % 3 == 0 and others:
+        # Another of the customer's own accounts, written differently ("A2" -> " a-2").
+        own_raw.at[i, "counterparty_account"] = " " + others[0].lower()[0] + "-" + others[0][1:]
+        own_rows.append((i, others[0]))
+    elif i % 3 == 1:
+        # An account of ANOTHER customer: not an own account.
+        own_raw.at[i, "counterparty_account"] = accounts_of[other_cust[cust]][0]
+        foreign_rows.append(i)
+own_table = account_order_table(own_raw, BankSchema())
+number = {(r.customer_id, r.account_number): r.account_order for r in own_table.itertuples()}
+own_ord = add_account_order(own_raw.copy(), BankSchema())
+cp = own_ord[COUNTERPARTY_ORDER_COL]
+check("counterparty_order = the counterparty's own account number (format-tolerant)",
+      len(own_rows) > 5 and all(cp[i] == number[(own_raw.at[i, "customer_id"], a)]
+                                for i, a in own_rows))
+check("another customer's account is not an own account",
+      len(foreign_rows) > 5 and all(cp[i] == 0 for i in foreign_rows))
+check("counterparty_order is 0 elsewhere",
+      int((cp > 0).sum()) == len(own_rows))
+
+own_ord.loc[own_rows[0][0], COUNTERPARTY_ORDER_COL] = 40           # beyond the cap
+ucfg = BankTokenizerConfig(include_account_time_delta=True, counterparty_hash_size=64,
+                           counterparty_min_customers=3, account_token="order",
+                           own_account_counterparty=True)
+upipe = BankTransferTokenizerPipeline(config=ucfg)
+uproc = upipe.preprocess(own_ord.copy())
+upipe.fit(uproc)
+utoks = upipe.transform(uproc)
+plain = BankTransferTokenizerPipeline(config=ocfg)
+pproc = plain.preprocess(own_ord.copy())
+plain.fit(pproc)
+ptoks = plain.transform(pproc)
+step_of = {upipe.steps[t].token_prefix(): t for t in upipe.tokenizer_order}
+ucpty, uacct = utoks[step_of["CPTY"]], utoks[step_of["ACCT"]]
+is_own = uproc["cpty_own_val"] > 0
+check("own rows: CPTY slot = ACCT_<counterparty_order>, capped",
+      all(ucpty[i] == "ACCT_%02d" % min(int(uproc.at[i, COUNTERPARTY_ORDER_COL]), 16)
+          for i in uproc.index[is_own]) and (ucpty[is_own] == "ACCT_16").any())
+check("other rows: CPTY slot unchanged",
+      ucpty[~is_own].tolist() == ptoks[step_of["CPTY"]][~is_own].tolist())
+check("every other slot unchanged",
+      utoks.drop(columns=[step_of["CPTY"]]).equals(ptoks.drop(columns=[step_of["CPTY"]])))
+check("same vocabulary: no new token", upipe.vocab == plain.vocab)
+uvocab = upipe.vocab
+check("the CPTY slot's ACCT_k has the same id as the account's own ACCT_k",
+      all(uvocab[t] == uvocab["ACCT_%s" % t.split("_")[1]] for t in ucpty[is_own]))
+
+# A -> B -> A: customer X moves money from account A to B, then back.
+abx = raw.iloc[:2].copy().reset_index(drop=True)
+abx["customer_id"] = "KX"
+abx["account_number"] = ["A", "B"]
+abx["counterparty_account"] = ["B", "A"]
+abx["datetime"] = pd.to_datetime(["2024-01-01", "2024-01-02"])
+abp = upipe.preprocess(add_account_order(abx, BankSchema()))
+abt = upipe.transform(abp)
+check("A -> B -> A reads ACCT_01 .. ACCT_02, then ACCT_02 .. ACCT_01",
+      list(zip(abt[step_of["ACCT"]], abt[step_of["CPTY"]]))
+      == [("ACCT_01", "ACCT_02"), ("ACCT_02", "ACCT_01")],
+      str(list(zip(abt[step_of["ACCT"]], abt[step_of["CPTY"]]))))
+
+ureloaded = BankTransferTokenizerPipeline.from_state(json.loads(json.dumps(upipe.get_state())))
+check("own_account_counterparty is saved and reloads",
+      ureloaded.config.own_account_counterparty
+      and ureloaded.transform(ureloaded.preprocess(own_ord.copy())).equals(utoks))
+check("a state without the option reloads with it off",
+      BankTransferTokenizerPipeline.from_state(json.loads(json.dumps(opipe.get_state())))
+      .config.own_account_counterparty is False)
+try:
+    upipe.preprocess(own_ord.drop(columns=[COUNTERPARTY_ORDER_COL]))
+    good = False
+except ValueError as e:
+    good = "add_account_order.py --force" in str(e)
+check("missing counterparty_order column -> clear error", good)
+for bad in (dict(own_account_counterparty=True),                       # account_token hash
+            dict(own_account_counterparty=True, account_token="order", drop_fields=("CPTY",)),
+            dict(own_account_counterparty=True, account_token="order", sequence_scope="account")):
+    try:
+        BankTokenizerConfig(**bad).normalized()
+        good = False
+    except ValueError:
+        good = True
+    check(f"rejected: {bad}", good)
+
 # ------------------------------------------------------------------ summary
 print("\n" + "=" * 60)
 print(f"{len(ok)} passed, {len(fail)} failed")

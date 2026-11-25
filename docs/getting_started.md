@@ -5,7 +5,7 @@ code folder. Do the steps in order; steps 1–4 are done once.
 
 | Step | What | How often |
 |---|---|---|
-| 1 | Get the code | once (then `git pull` to update) |
+| 1 | Get the code | once (then `git pull`, or `codesync.sh pull`, to update) |
 | 2 | Create the Python environment with uv | once |
 | 3 | Set the paths in `configs/paths.yaml` | once |
 | 4 | Prepare the data | once |
@@ -24,6 +24,24 @@ cd ltm
 
 (Or on GitHub: **Code → Download ZIP**, upload it, unzip it and `cd` into the folder.
 With a zip, runs cannot record the code version.)
+
+**Run machine without GitHub access:** move the code as one file with
+`scripts/codesync.sh` (needs only `git` on both sides).
+
+```bash
+# where you edit (committed code only: no data, no untracked files)
+bash scripts/codesync.sh pack                 # -> ../transfer-ltm.bundle
+
+# upload transfer-ltm.bundle to the run machine, then, in the code folder there:
+bash scripts/codesync.sh pull /path/to/transfer-ltm.bundle
+```
+
+`pull` makes the folder exactly the bundle's version: changed files are replaced, files
+deleted from the repository are deleted, and everything else (data, runs, `.venv`) is left
+alone. If files were edited on the run machine it stops and lists them; `--force` saves
+them to `.codesync_backup/` first, then replaces them. The first time, upload
+`scripts/codesync.sh` by hand too (it comes with the bundle afterwards); that first pull
+turns the folder into a git copy, so runs record the code version they used.
 
 Every command below is run from this folder.
 

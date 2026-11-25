@@ -1,12 +1,30 @@
-# Early stopping: base trained until the validation loss stops improving, instead of a
+# The reference run: every planned experiment changes one thing from it.
+# Early stopping: trained until the validation loss stops improving, instead of a
 # fixed 2000 steps (every 2000-step run was still improving at its last step).
-# Stops after 5 validations (500 steps) without an improvement > 0.001, then 500 decay
+# Stops after 3 validations (300 steps) without an improvement > 0.001, then 500 decay
 # steps; 20000 steps is only a ceiling. lr constant after warmup (no cosine).
+# Free text included by default: the first 4 words of transaction_comment, in order;
+# a word is known if at least 5 customers use it, others become TXT_OTHER.
+# Accounts by order within the customer (ACCT_01, ACCT_02, ...) instead of a hash:
+# a hash bucket means nothing and is shared by unrelated accounts (noise). A transfer
+# between the customer's own accounts puts the other account's ACCT token in the
+# counterparty slot too, so A -> B -> A reads ACCT_01 .. ACCT_02, then ACCT_02 .. ACCT_01.
+# Needs the account_order and counterparty_order columns in the splits (notebook 01
+# writes them; older splits: run scripts/add_account_order.py --force once).
+# Other text methods: text_bag, text_category, text_hashed; without text: no_text.
 base: base.yaml
 name: early_stop
-description: base trained until the validation loss stops improving (ceiling 20000 steps)
+description: base trained until the validation loss stops improving (ceiling 20000 steps), with the text as 4 words and accounts by order
+schema:
+  description: transaction_comment
+tokenizer:
+  text_strategy: words
+  text_slots: 4
+  text_min_customers: 5
+  account_token: order
+  own_account_counterparty: true
 training:
   step_scheduler.max_steps: 20000
-  step_scheduler.early_stop_patience: 5
+  step_scheduler.early_stop_patience: 3
   step_scheduler.early_stop_min_delta: 0.001
   step_scheduler.early_stop_cooldown_steps: 500

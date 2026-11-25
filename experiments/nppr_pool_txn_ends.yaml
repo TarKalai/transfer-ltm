@@ -1,0 +1,10 @@
+# NPPR's own embedding (its paper): the mean of the states that close each transfer.
+# NPPR trains only those states, so mean pooling over every token may hide what it
+# learned. Reuses the model of run "nppr": stages 04-05 only. Compare with nppr
+# (pooling) and with early_stop_pool_txn_ends (objective).
+name: nppr_pool_txn_ends
+description: model of run "nppr", mean of the transfer-end states (txn_ends pooling)
+from_run: nppr
+embeddings:
+  pooling: txn_ends
+  history_window: 32

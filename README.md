@@ -11,7 +11,7 @@ reported here.** The code runs on any extract with the same kind of columns
 Based on NVIDIA's [Transaction Foundation Model](https://github.com/NVIDIA-AI-Blueprints/transaction-foundation-model)
 developer example (Apache 2.0), which pretrains on public card transactions. This
 repository changes it substantially: a fitted tokenizer for bank transfers, a plain
-PyTorch training loop, next-token and masked-token pretraining, history windows for
+PyTorch training loop, next-token, masked-token, NPPR and CoLES pretraining, history windows for
 embeddings, and an experiment runner. Files taken from the original keep their NVIDIA
 headers; see [License](#license).
 
@@ -21,7 +21,7 @@ headers; see [License](#license).
 |---|---|
 | `01_dataset_baseline.ipynb` | Declare the column names, split by time (train / val / test), build the labelled sets, XGBoost on the raw columns |
 | `02_seq_preproc_tokenization.ipynb` | Fit the tokenizer on train only, write one token corpus per split |
-| `03_foundation_model_training.ipynb` | Pretrain the model (next-token or masked-token prediction), with early stopping |
+| `03_foundation_model_training.ipynb` | Pretrain the model (next-token, masked-token, NPPR or CoLES), with early stopping |
 | `04_inference_embedding_extraction.ipynb` | One embedding per labelled transfer, from a window of the customer's previous transfers |
 | `05_xgboost_fraud_detection.ipynb` | XGBoost and logistic regression on raw columns, embeddings, and both |
 | `06_results.ipynb` | Read one finished run (curves, metrics, checks) |
@@ -90,6 +90,13 @@ Built from scratch on the transfer tokens (no pretrained text weights), in
   `qwen2`, `mistral`, `gpt2`).
 - `model.objective: mlm`: masked-token prediction with an encoder (`modernbert`), hiding
   single tokens or whole transfers.
+- `model.objective: nppr`: next transfer prediction and past reconstruction
+  ([Skalski et al. 2023](https://arxiv.org/abs/2401.01641)), on the state at the end of
+  each transfer.
+- `model.objective: coles`: contrastive learning on slices of each customer's history
+  ([Babaev et al. 2022](https://arxiv.org/abs/2002.08232)).
+
+All four train the same transformer; `src/event_objectives.py` holds the last two.
 
 Model sizes, early stopping, pooling, fine-tuning and the rest are switches in
 `configs/pretrain_bank_decoder.yaml` and [docs/experiments.md](docs/experiments.md).

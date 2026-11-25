@@ -279,8 +279,13 @@ def build_bank_clm_dataset(
     mask_prob: float = 0.15,
     mask_unit: str = "token",
     mask_seed: Optional[int] = None,
+    period: Optional[int] = None,
+    slices: int = 5,
+    min_txns: int = 8,
+    max_txns: int = 64,
+    slice_seed: Optional[int] = None,
     **kwargs,
-) -> FinancialCLMDataset:
+) -> Dataset:
     """Entry point for the bank-transfer YAML config.
 
     Parameters
@@ -297,9 +302,16 @@ def build_bank_clm_dataset(
         ``"mlm"`` returns a :class:`BankMLMDataset` (masked-token prediction)
         with ``mask_token_id`` (required), ``mask_prob``, ``mask_unit`` and
         ``mask_seed``; src/train_decoder.py passes them from ``mlm:``.
+        ``"nppr"`` returns the plain sequences (the transfer-level heads read
+        them, src/event_objectives.py). ``"coles"`` returns a
+        :class:`~src.event_objectives.BankCoLESDataset` of random slices, with
+        ``period`` (tokens per transfer + 1, required), ``slices``,
+        ``min_txns``, ``max_txns`` and ``slice_seed`` (from ``coles:``).
     """
-    if objective not in ("clm", "mlm"):
-        raise ValueError(f"objective={objective!r}; choose 'clm' or 'mlm'")
+    if objective not in ("clm", "mlm", "nppr", "coles"):
+        raise ValueError(f"objective={objective!r}; choose clm, mlm, nppr or coles")
+    if objective == "coles" and not period:
+        raise ValueError("objective='coles' needs period (tokens per transfer + 1)")
     if objective == "mlm" and mask_token_id is None:
         raise ValueError("objective='mlm' needs mask_token_id")
     tokenizer = VocabTokenizer.from_file(vocab_path)
@@ -344,6 +356,17 @@ def build_bank_clm_dataset(
             "regenerate both (notebook 02 / scripts/build_bank_corpus.py)."
         )
 
+    if objective == "coles":
+        from src.event_objectives import BankCoLESDataset
+        ds = BankCoLESDataset(
+            sequences, period=int(period), pad_token_id=tokenizer.pad_token_id,
+            bos_token_id=tokenizer.bos_token_id, slices=slices, min_txns=min_txns,
+            max_txns=max_txns, seq_length=seq_length, slice_seed=slice_seed,
+        )
+        print(f"  CoLES: {len(ds):,} sequences with at least {min_txns} transfers "
+              f"({ds.dropped:,} shorter ones left out); {slices} slices of "
+              f"{min_txns}-{max_txns} transfers each")
+        return ds
     if objective == "mlm":
         special = [tokenizer.vocab[t] for t in ("<pad>", "<bos>", "<eos>", "<sep>", "<unk>")
                    if t in tokenizer.vocab]

@@ -1,6 +1,6 @@
 # Run-to-run variance under early stopping: early_stop retrained with another seed.
 # The spread of early_stop, early_stop_seed_1 and early_stop_seed_2 is the noise
-# floor that account_order, pretrain_on_test, text and MLM must beat.
+# floor that increase_pretrain_data, text, model size and the pretraining methods must beat.
 base: early_stop.yaml
 name: early_stop_seed_2
 description: early_stop, seed 2 (pretraining and XGBoost)

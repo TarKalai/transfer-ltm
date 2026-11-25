@@ -23,3 +23,7 @@ __pycache__/
 .ipynb_checkpoints/
 tmp_nb_rerun_results/
 tmp_nb_test_results/
+
+# Code transfer files (scripts/codesync.sh)
+*.bundle
+.codesync_backup/

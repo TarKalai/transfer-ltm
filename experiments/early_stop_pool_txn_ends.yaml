@@ -1,0 +1,9 @@
+# The reference model with txn_ends pooling: the fair partner of nppr_pool_txn_ends
+# (same pooling, next-token pretraining). Reuses the model of run "early_stop":
+# stages 04-05 only.
+name: early_stop_pool_txn_ends
+description: model of run "early_stop", mean of the transfer-end states (txn_ends pooling)
+from_run: early_stop
+embeddings:
+  pooling: txn_ends
+  history_window: 32

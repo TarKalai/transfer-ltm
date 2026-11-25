@@ -1,8 +1,7 @@
+# Text method: compare with early_stop (text as the first 4 words).
 base: early_stop.yaml
 name: text_bag
-description: early_stop plus the description text, "bag" strategy (rarest known words), 4 slots
-schema:
-  description: transaction_comment
+description: early_stop with the text as "bag" strategy (rarest known words), 4 slots
 tokenizer:
   text_strategy: bag
   text_slots: 4

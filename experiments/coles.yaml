@@ -1,0 +1,13 @@
+# CoLES (Babaev et al. 2022): contrastive learning on slices of each customer's
+# history, instead of next-token prediction. Same model as early_stop; only the
+# training objective changes (src/event_objectives.py, settings in coles: of the
+# config). Customers with fewer than coles.min_txns transfers are left out of
+# pretraining (they still get embeddings).
+# The early-stop threshold is scaled to the loss: the contrastive loss is far
+# smaller than a token loss (often below 0.1), so 0.001 would stop it too soon.
+base: early_stop.yaml
+name: coles
+description: early_stop trained with CoLES (contrastive, slices of the same customer) instead of next-token
+training:
+  model.objective: coles
+  step_scheduler.early_stop_min_delta: 0.0001

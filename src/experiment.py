@@ -261,15 +261,42 @@ class Experiment:
                                  f"{self.training['model.architecture']!r}; "
                                  f"choose from {sorted(ARCHITECTURES)}")
         objective = str(self.training.get("model.objective", "clm"))
-        if objective not in ("clm", "mlm"):
-            raise ValueError(f"{self.name}: model.objective must be clm or mlm, got {objective!r}")
+        if objective not in ("clm", "mlm", "nppr", "coles"):
+            raise ValueError(f"{self.name}: model.objective must be clm, mlm, nppr or coles, "
+                             f"got {objective!r}")
         from src.architectures import ENCODERS
         architecture = self.training.get(
             "model.architecture", yaml.safe_load(TRAINING_YAML.read_text())["model"].get("architecture"))
-        if (objective == "mlm") != (architecture in ENCODERS):
+        encoder = architecture in ENCODERS
+        if (objective == "mlm" and not encoder) or (objective in ("clm", "nppr") and encoder):
             raise ValueError(f"{self.name}: model.objective {objective} with model.architecture "
                              f"{architecture}: mlm needs an encoder ({sorted(ENCODERS)}), "
-                             "clm a decoder")
+                             "clm and nppr a decoder (coles takes either)")
+        if objective in ("nppr", "coles"):
+            # Transfer-level objectives: the language-model head is not trained.
+            if self.training.get("loss_weights"):
+                raise ValueError(f"{self.name}: loss_weights is for objective clm only")
+            if "surprise" in str(self.embeddings.get("pooling", "")):
+                raise ValueError(f"{self.name}: pooling 'surprise' needs objective clm "
+                                 "(it scores next-token predictions)")
+            if encoder and self.embeddings.get("finetune", "none") != "none":
+                raise ValueError(f"{self.name}: finetune is not supported with an encoder yet")
+            alpha = self.training.get("nppr.alpha", 0.1)
+            if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or not 0 <= alpha < 1:
+                raise ValueError(f"{self.name}: nppr.alpha must be in [0, 1) "
+                                 "(0 = next transfer only)")
+            self._check_number("nppr.decay_days", 60, lo=0.0)
+            for key, default in (("nppr.past_events", 8), ("nppr.decoder_hidden", 512),
+                                 ("coles.slices", 5), ("coles.min_txns", 8),
+                                 ("coles.max_txns", 64), ("coles.neg_count", 5)):
+                value = self.training.get(key, default)
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    raise ValueError(f"{self.name}: {key} must be a positive integer")
+            if self.training.get("coles.slices", 5) < 2:
+                raise ValueError(f"{self.name}: coles.slices must be at least 2")
+            if self.training.get("coles.min_txns", 8) > self.training.get("coles.max_txns", 64):
+                raise ValueError(f"{self.name}: coles.min_txns must not exceed coles.max_txns")
+            self._check_number("coles.margin", 0.5, lo=0.0)
         if objective == "mlm":
             if self.training.get("loss_weights"):
                 raise ValueError(f"{self.name}: loss_weights is for objective clm only")
@@ -284,6 +311,17 @@ class Experiment:
             prob = self.training.get("mlm.mask_prob", 0.15)
             if isinstance(prob, bool) or not isinstance(prob, (int, float)) or not 0 < prob < 1:
                 raise ValueError(f"{self.name}: mlm.mask_prob must be between 0 and 1")
+
+    def _check_number(self, key: str, default, lo: float, hi: Optional[float] = None,
+                      open_hi: bool = False) -> None:
+        """``training[key]`` is a number above ``lo`` (and below ``hi``)."""
+        value = self.training.get(key, default)
+        ok = not isinstance(value, bool) and isinstance(value, (int, float)) and value > lo
+        if ok and hi is not None:
+            ok = value < hi if open_hi else value <= hi
+        if not ok:
+            bound = f" and below {hi}" if hi is not None else ""
+            raise ValueError(f"{self.name}: {key} must be a number above {lo}{bound}")
 
     # -- locations ---------------------------------------------------------
     @property

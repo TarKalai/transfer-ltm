@@ -1,0 +1,6 @@
+# What the free text brings: early_stop without the text tokens.
+base: early_stop.yaml
+name: no_text
+description: early_stop without the description text
+tokenizer:
+  text_strategy: null

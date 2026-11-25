@@ -1,8 +1,7 @@
+# Text method: compare with early_stop (text as the first 4 words).
 base: early_stop.yaml
 name: text_hashed
-description: early_stop plus the description text, "hashed" strategy (first words, hash buckets)
-schema:
-  description: transaction_comment
+description: early_stop with the text as "hashed" strategy (first words, hash buckets)
 tokenizer:
   text_strategy: hashed
   text_slots: 4

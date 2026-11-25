@@ -37,7 +37,10 @@ ACCTH), which is also what a state file written before the option existed gets.
 With ``sequence_scope="account"`` the ACCTH token drops out (the sequence is a
 single account already), leaving 14. ``include_account_time_delta`` adds TDIFA
 right after TDIF. ``account_token="order"`` replaces ACCTH with ACCT: the
-account's number within its customer (see :func:`add_account_order`).
+account's number within its customer (see :func:`add_account_order`). With
+``own_account_counterparty`` a transfer to or from one of the customer's own
+accounts puts that account's ACCT token in the CPTY slot, so A -> B -> A reads
+``ACCT_01 .. ACCT_02`` then ``ACCT_02 .. ACCT_01``: one token per account.
 
 Column -> tokenizer mapping and the reasoning behind it:
 
@@ -385,6 +388,13 @@ class BankTokenizerConfig:
     account_token: str = "hash"
     #: Last ACCT number: accounts from this one on share ACCT_<max>.
     account_order_max: int = 16
+    #: With account_token="order": when the counterparty is one of the customer's
+    #: own accounts, the CPTY slot gets that account's ACCT_<n> token instead of a
+    #: CPTY token. One token per account on both sides of a transfer, so money
+    #: going A -> B -> A reads ACCT_01 .. ACCT_02, then ACCT_02 .. ACCT_01; the
+    #: slot (its place in the transfer) says which side it is. Reads the
+    #: ``counterparty_order`` column (add_account_order, over the full history).
+    own_account_counterparty: bool = False
     include_customer_hash: bool = False
     customer_hash_size: int = 1024
     # temporal ranges (change if your extract encodes dow as 1-7 etc.)
@@ -455,6 +465,10 @@ class BankTokenizerConfig:
             raise ValueError(f"account_token must be 'hash' or 'order', got {self.account_token!r}")
         if self.account_order_max < 1:
             raise ValueError(f"account_order_max must be >= 1, got {self.account_order_max}")
+        if self.own_account_counterparty and not (
+                self.include_account_hash and self.account_token == "order"):
+            raise ValueError("own_account_counterparty needs the ACCT token: "
+                             "account_token='order' in customer scope")
         if self.amount_clip_quantiles is not None:
             self.amount_clip_quantiles = tuple(self.amount_clip_quantiles)
         self.hour_range = tuple(self.hour_range)
@@ -463,6 +477,10 @@ class BankTokenizerConfig:
         if self.field_order is not None:
             self.field_order = tuple(str(name).upper() for name in self.field_order)
         self.drop_fields = tuple(str(name).upper() for name in self.drop_fields)
+        dropped = sorted({"ACCT", "CPTY"} & set(self.drop_fields))
+        if self.own_account_counterparty and dropped:
+            raise ValueError(f"own_account_counterparty needs ACCT and CPTY, but drop_fields "
+                             f"removes {dropped}")
         # Strategy names are checked here, not when the step is first built
         # mid-tokenization, so a typo in an experiment fails before any work.
         if self.tail_strategy not in known_tail_strategies():
@@ -505,6 +523,10 @@ ACCTH_COL = "acct_hash"
 ACCT_COL = "acct_order_val"
 #: Source column written by add_account_order() (notebook 01).
 ACCOUNT_ORDER_COL = "account_order"
+#: Also written by add_account_order(): the counterparty's account number within
+#: the customer when it is one of the customer's own accounts, 0 otherwise.
+COUNTERPARTY_ORDER_COL = "counterparty_order"
+CPTY_OWN_COL = "cpty_own_val"
 TXT_COL = "txt_raw"
 AMTREL_COL = "amt_rel"
 
@@ -931,8 +953,51 @@ class BankTransferTokenizerPipeline(TokenizerPipeline):
             df[ACCT_COL] = order.astype("int32")
         elif cfg.include_account_hash:
             df[ACCTH_COL] = stable_hash(self._clean_str(df[s.account_number]))
+        if cfg.own_account_counterparty:
+            if COUNTERPARTY_ORDER_COL not in df.columns:
+                raise ValueError(
+                    f"own_account_counterparty needs the {COUNTERPARTY_ORDER_COL!r} column, "
+                    "which the data does not have. Add it to the split files with "
+                    "`python scripts/add_account_order.py --force` (notebook 01 writes it "
+                    "for new splits)."
+                )
+            own = df[COUNTERPARTY_ORDER_COL]
+            if bool(own.isnull().any()):
+                raise ValueError(f"{COUNTERPARTY_ORDER_COL!r} has missing values: rerun "
+                                 "`python scripts/add_account_order.py --force`")
+            df[CPTY_OWN_COL] = own.astype("int32")
 
         return df
+
+    # ------------------------------------------------------------------
+    # Transform
+    # ------------------------------------------------------------------
+
+    def transform(self, df):
+        """Token strings per step; see ``own_account_counterparty`` for the CPTY slot."""
+        out = super().transform(df)
+        if self.config.own_account_counterparty:
+            out = self._own_account_counterparty(out, df)
+        return out
+
+    def _own_account_counterparty(self, out, df):
+        """CPTY slot -> ``ACCT_<n>`` where the counterparty is the customer's account n.
+
+        The token comes from the ACCT step itself, so it is the very token (and id)
+        the account gets in its own transfers, capped at account_order_max the same way.
+        """
+        if CPTY_OWN_COL not in df.columns:
+            raise ValueError(f"own_account_counterparty: transform() needs the frame from "
+                             f"preprocess() (no {CPTY_OWN_COL!r} column)")
+        step_of = {self.steps[t].token_prefix(): t for t in self.tokenizer_order}
+        acct, cpty = step_of["ACCT"], step_of["CPTY"]
+        own = df[CPTY_OWN_COL]
+        is_own = own > 0
+        if not bool(is_own.any()):
+            return out
+        acct_tokens = self.steps[acct].tokenize(own.clip(lower=1))
+        out[cpty] = out[cpty].where(~is_own, acct_tokens)
+        return out
 
     # -- preprocessing helpers -----------------------------------------
 
@@ -1080,8 +1145,38 @@ def account_order_table(df, schema: BankSchema):
     return first[[cust, acct, ACCOUNT_ORDER_COL]]
 
 
+def _account_key(series):
+    """Account number for matching the two account columns: upper case, letters
+    and digits only (``"be12 3456"`` and ``"BE123456"`` match). Missing -> ``""``."""
+    key = series.astype("str").str.upper().str.replace(r"[^0-9A-Z]", "", regex=True)
+    return key.where(series.notnull(), "")
+
+
+def counterparty_order(df, schema: BankSchema, table):
+    """Per row of ``df``: the counterparty's ``account_order`` when the counterparty
+    account is one of the same customer's accounts in ``table``, else 0.
+
+    ``table`` is :func:`account_order_table` over the full history, so an own
+    account gets the same number on both sides of a transfer. Returns an int32
+    series in ``df``'s row order, with a fresh 0..n-1 index.
+    """
+    cust = schema.customer_id
+    accounts = table[[cust]].copy()
+    accounts["_key"] = _account_key(table[schema.account_number])
+    accounts[ACCOUNT_ORDER_COL] = table[ACCOUNT_ORDER_COL]
+    accounts = accounts[accounts["_key"] != ""]
+    accounts = accounts.groupby([cust, "_key"], as_index=False)[ACCOUNT_ORDER_COL].min()
+    rows = df[[cust]].copy()
+    rows["_key"] = _account_key(df[schema.counterparty_account])
+    rows["_pos"] = np.arange(len(rows))
+    got = rows.merge(accounts, on=[cust, "_key"], how="left").sort_values("_pos")
+    return got[ACCOUNT_ORDER_COL].fillna(0).astype("int32").reset_index(drop=True)
+
+
 def add_account_order(df, schema: BankSchema, table=None):
-    """``df`` with the ``account_order`` column, rows kept in their order.
+    """``df`` with the ``account_order`` column, rows kept in their order -- and
+    ``counterparty_order`` (see :func:`counterparty_order`) when ``df`` has the
+    counterparty account column.
 
     ``table`` is :func:`account_order_table` over the full history; when None it
     is computed from ``df``, which must then hold that full history.
@@ -1089,7 +1184,11 @@ def add_account_order(df, schema: BankSchema, table=None):
     if table is None:
         table = account_order_table(df, schema)
     keys = [schema.customer_id, schema.account_number]
-    out = df.drop(columns=[ACCOUNT_ORDER_COL]) if ACCOUNT_ORDER_COL in df.columns else df
+    old = [c for c in (ACCOUNT_ORDER_COL, COUNTERPARTY_ORDER_COL) if c in df.columns]
+    out = df.drop(columns=old) if old else df
     out = out.assign(_pos=np.arange(len(out)))
     out = out.merge(table, on=keys, how="left").sort_values("_pos")
-    return out.drop(columns=["_pos"]).reset_index(drop=True)
+    out = out.drop(columns=["_pos"]).reset_index(drop=True)
+    if schema.counterparty_account in out.columns:
+        out[COUNTERPARTY_ORDER_COL] = counterparty_order(out, schema, table)
+    return out

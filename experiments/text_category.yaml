@@ -1,7 +1,6 @@
+# Text method: compare with early_stop (text as the first 4 words).
 base: early_stop.yaml
 name: text_category
-description: early_stop plus the description text, "category" strategy (whole cleaned string)
-schema:
-  description: transaction_comment
+description: early_stop with the text as "category" strategy (whole cleaned string)
 tokenizer:
   text_strategy: category

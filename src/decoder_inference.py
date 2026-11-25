@@ -168,6 +168,27 @@ def _pool_last_txn(hidden, attention_mask, ctx=None):
     return picked.mean(dim=1)
 
 
+@register_pooling("txn_ends")
+def _pool_txn_ends(hidden, attention_mask, ctx=None):
+    """Mean of the states at the token closing each transfer (<sep>, last <eos>).
+
+    One vector per transfer, each having read that transfer and the earlier ones:
+    NPPR's event embeddings, averaged as in its paper. Positions are counted back
+    from the last token in steps of tokens_per_txn + 1 (rigid layout).
+    """
+    tokens_per_txn = _ctx(ctx).tokens_per_txn
+    if not tokens_per_txn:
+        raise ValueError("pooling 'txn_ends' needs tokens_per_txn")
+    period = tokens_per_txn + 1
+    end = _last_index(attention_mask)                                   # (b,)
+    k = torch.arange(hidden.size(1) // period + 1, device=hidden.device)
+    pos = end[:, None] - k[None, :] * period                            # (b, K)
+    ok = (pos >= tokens_per_txn).float()           # a whole transfer before it
+    picked = hidden.gather(1, pos.clamp(min=0)[:, :, None].expand(-1, -1, hidden.size(-1)))
+    w = ok.unsqueeze(-1)
+    return (picked.float() * w).sum(dim=1) / w.sum(dim=1).clamp(min=1)
+
+
 @register_pooling("surprise", dim=lambda hidden_size, tokens_per_txn: tokens_per_txn + 4)
 def _pool_surprise(hidden, attention_mask, ctx=None, row_chunk: Optional[int] = None,
                    budget_bytes: int = 1 << 30):
@@ -274,9 +295,13 @@ class HuggingFaceDecoderInference:
             if (self.model_path / "config.json").exists() else {}
         self.masked_lm = any(str(a).endswith("ForMaskedLM")
                              for a in (model_cfg.get("architectures") or []))
-        if self.masked_lm and "surprise" in pooling_parts(pooling):
+        # nppr / coles train the transformer but not its language-model head.
+        self.pretrain_objective = model_cfg.get("pretrain_objective") or (
+            "mlm" if self.masked_lm else "clm")
+        if self.pretrain_objective != "clm" and "surprise" in pooling_parts(pooling):
             raise ValueError("pooling 'surprise' scores next-token predictions: it needs a "
-                             "model trained with model.objective: clm, not mlm")
+                             "model trained with model.objective: clm, not "
+                             f"{self.pretrain_objective}")
         if self.masked_lm:
             from transformers import AutoModelForMaskedLM as _Auto
         else:

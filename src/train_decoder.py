@@ -86,6 +86,10 @@ DEFAULT_CLIP_GRAD_NORM = 1.0
 #: before the weights, so a run that dies mid-serialization (a full disk, for
 #: instance) leaves a directory that looks loadable but holds truncated
 #: weights. Discovery keys on this marker, not on ``config.json``.
+OBJECTIVES = ("clm", "mlm", "nppr", "coles")
+#: Transfer-level objectives (src/event_objectives.py, imported only when used).
+EVENT_OBJECTIVES = ("nppr", "coles")
+
 CHECKPOINT_MARKER = "training_state.json"
 #: Seed of the validation subset: fixed, so every run sees the same sequences.
 VAL_SUBSET_SEED = 12345
@@ -214,7 +218,9 @@ def build_model(model_section: Dict[str, Any]) -> torch.nn.Module:
 
     ``model.objective`` picks the kind: ``clm`` (default) a causal LM (next-token
     prediction, a decoder architecture), ``mlm`` a masked LM (masked-token
-    prediction, an encoder architecture: ``modernbert``).
+    prediction, an encoder architecture: ``modernbert``). ``nppr`` needs a
+    decoder, ``coles`` takes either (src/event_objectives.py); the model is
+    built with its usual head, which these two objectives leave untrained.
 
     ``model._target_`` (NeMo's wrapper) is ignored; the architecture comes
     from ``model.config._target_``, so swapping ``transformers.LlamaConfig``
@@ -256,12 +262,12 @@ def build_model(model_section: Dict[str, Any]) -> torch.nn.Module:
     if objective == "mlm" and architecture not in ENCODERS:
         raise ValueError(f"model.objective: mlm needs an encoder model.architecture "
                          f"({sorted(ENCODERS)}), got {architecture!r}")
-    if objective == "clm" and architecture in ENCODERS:
-        raise ValueError(f"model.architecture: {architecture} is an encoder: set "
-                         "model.objective: mlm")
+    if objective in ("clm", "nppr") and architecture in ENCODERS:
+        raise ValueError(f"model.architecture: {architecture} is an encoder: objective "
+                         f"{objective} needs a decoder (mlm or coles take an encoder)")
     config_cls = _resolve_target(target)
     hf_config = config_cls(**cfg_section)
-    auto_cls = AutoModelForMaskedLM if objective == "mlm" else AutoModelForCausalLM
+    auto_cls = AutoModelForMaskedLM if architecture in ENCODERS else AutoModelForCausalLM
 
     try:
         model = auto_cls.from_config(
@@ -283,10 +289,11 @@ def build_model(model_section: Dict[str, Any]) -> torch.nn.Module:
 
 
 def model_objective(model_section: Optional[Dict[str, Any]]) -> str:
-    """``model.objective``: "clm" (next-token, the default) or "mlm" (masked-token)."""
+    """``model.objective``: "clm" (next-token, the default), "mlm" (masked-token),
+    "nppr" or "coles" (transfer-level, src/event_objectives.py)."""
     objective = str((model_section or {}).get("objective") or "clm").lower()
-    if objective not in ("clm", "mlm"):
-        raise ValueError(f"model.objective={objective!r}; choose 'clm' or 'mlm'")
+    if objective not in OBJECTIVES:
+        raise ValueError(f"model.objective={objective!r}; choose one of {OBJECTIVES}")
     return objective
 
 
@@ -495,7 +502,8 @@ def weighted_lm_loss(logits, labels, weights, return_plain: bool = False):
 
 
 def fit_local_batch(cfg: Dict[str, Any], device, local_batch: int, global_batch: int,
-                    world_size: int = 1, headroom: float = 0.90, log=print) -> int:
+                    world_size: int = 1, headroom: float = 0.90, log=print,
+                    probe: Optional[Callable[[torch.nn.Module, int], Any]] = None) -> int:
     """Largest ``local_batch`` (halving) whose training step fits on this GPU.
 
     One real forward + backward at full ``seq_length`` with a throwaway model:
@@ -503,6 +511,8 @@ def fit_local_batch(cfg: Dict[str, Any], device, local_batch: int, global_batch:
     passes only if the peak stays under ``headroom`` x device memory -- the
     validation pass (fp32 per-field loss) and fragmentation need the rest.
     The global batch is unchanged: accumulation absorbs the difference.
+    ``probe(model, b)``, when given, returns the loss of a real batch of ``b``
+    (the transfer-level objectives, whose batches are not plain sequences).
     """
     if device.type != "cuda":
         return local_batch
@@ -522,7 +532,9 @@ def fit_local_batch(cfg: Dict[str, Any], device, local_batch: int, global_batch:
             vocab = int(model.config.vocab_size)
             ids = torch.randint(5, vocab, (b, seq_length), device=device)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
-                if cfg.get("loss_weights"):     # the weighted path holds more logits
+                if probe is not None:
+                    loss = probe(model, b)
+                elif cfg.get("loss_weights"):     # the weighted path holds more logits
                     out = model(input_ids=ids, attention_mask=torch.ones_like(ids))
                     loss = weighted_lm_loss(out.logits, ids, torch.ones(vocab))
                 else:
@@ -632,6 +644,55 @@ def train_bank_decoder(
                       "mask_unit": str(mlm_cfg.get("mask_unit", "token"))}
         # Validation: the same masks every time (and the same for every run).
         val_extra = dict(data_extra, mask_seed=int(mlm_cfg.get("val_mask_seed", 1234)))
+    # nppr / coles: transfer-level objectives (src/event_objectives.py). They need
+    # the transfer layout: period = tokens per transfer + 1 (notebook 03 sets it).
+    event_objective = objective in EVENT_OBJECTIVES
+    period = int((cfg.get("diagnostics") or {}).get("field_loss_period") or 0)
+    if event_objective:
+        if cfg.get("loss_weights"):
+            raise ValueError("loss_weights is for next-token prediction only (objective clm)")
+        if period < 2:
+            raise ValueError(f"model.objective: {objective} needs diagnostics.field_loss_period "
+                             "(tokens per transfer + 1; notebook 03 sets it)")
+        data_extra = {"objective": objective}
+        val_extra = dict(data_extra)
+        if objective == "coles":
+            ccfg = dict(cfg.get("coles") or {})
+            data_extra.update(period=period, slices=int(ccfg.get("slices", 5)),
+                              min_txns=int(ccfg.get("min_txns", 8)),
+                              max_txns=int(ccfg.get("max_txns", 64)))
+            # Validation: the same slices every time.
+            val_extra = dict(data_extra, slice_seed=int(ccfg.get("val_seed", 1234)))
+
+    # -- Data ----------------------------------------------------------
+    train_ds = build_dataset(cfg.get("dataset"), **data_extra)
+    if train_ds is None:
+        raise ValueError("dataset.data_path is not set — nothing to train on.")
+    val_ds = build_dataset(cfg.get("validation_dataset"), **val_extra)
+
+    layout = None
+    probe = None
+    if event_objective:
+        from src.event_objectives import EventLayout, build_pretrainer
+        vocab_path_ = (cfg.get("dataset") or {}).get("vocab_path")
+        vocab_ = vocab_of(_vocab_payload(vocab_path_))
+        state_path = (cfg.get("nppr") or {}).get("tokenizer_state") or (
+            Path(vocab_path_).parent / "tokenizer_state.json")
+        layout = EventLayout.build(
+            train_ds.sequences, period, vocab_,
+            max(int(cfg["model"]["config"].get("vocab_size") or 0), max(vocab_.values()) + 1),
+            state_path=state_path, need_gaps=objective == "nppr",
+            log=print if rank == 0 else (lambda *a: None))
+        # Memory probe on real items: the longest sequences (nppr; coles items are
+        # always padded to the longest slice).
+        lengths = np.array([len(x) for x in train_ds.sequences])
+        probe_idx = np.argsort(-lengths, kind="stable")[:max(1, local_batch)].tolist()
+
+        def probe(lm, b):
+            net_ = build_pretrainer(objective, lm, cfg, layout).to(device)
+            idx = (probe_idx * b)[:b]
+            batch_ = torch.utils.data.default_collate([train_ds[i] for i in idx])
+            return net_(**{k: v.to(device) for k, v in batch_.items()})["loss"]
 
     # Shrink the per-step batch until a training step fits this GPU (global
     # batch and optimizer maths unchanged). step_scheduler.auto_fit_batch: false
@@ -639,12 +700,15 @@ def train_bank_decoder(
     configured_local_batch = local_batch      # before any memory fitting (val subset size)
     if sched.get("auto_fit_batch", True):
         fitted = fit_local_batch(cfg, device, local_batch, global_batch, world_size,
-                                 log=print if rank == 0 else (lambda *a: None))
+                                 log=print if rank == 0 else (lambda *a: None), probe=probe)
         if fitted != local_batch:
             if rank == 0:
                 print(f"  local_batch_size {local_batch} -> {fitted} to fit GPU memory; "
                       f"global batch stays {global_batch} (more accumulation)")
             local_batch = fitted
+    if objective == "coles" and local_batch < 2:
+        raise ValueError("coles: a micro-batch must hold at least 2 sequences (the negatives); "
+                         "lower coles.max_txns or enable model.gradient_checkpointing")
 
     per_step = local_batch * world_size
     if global_batch % per_step != 0:
@@ -653,12 +717,6 @@ def train_bank_decoder(
             f"local_batch_size={local_batch} x world_size={world_size}."
         )
     accum_steps = global_batch // per_step
-
-    # -- Data ----------------------------------------------------------
-    train_ds = build_dataset(cfg.get("dataset"), **data_extra)
-    if train_ds is None:
-        raise ValueError("dataset.data_path is not set — nothing to train on.")
-    val_ds = build_dataset(cfg.get("validation_dataset"), **val_extra)
 
     # -- Validation subsample: fixed *and* random ----------------------
     # The corpus is written by groupby(group_cols + ["_chunk_id"]), which sorts,
@@ -742,13 +800,23 @@ def train_bank_decoder(
         if rank == 0:
             print(f"  Loss weights : {cfg.get('loss_weights')} (training loss only; the "
                   "logged train loss is the unweighted one)")
-    n_params = sum(p.numel() for p in model.parameters())
+    # ``core`` is the transformer (saved as the checkpoint); ``net`` is what the loop
+    # calls: the transformer itself (clm, mlm) or the transformer with its
+    # transfer-level heads (nppr, coles).
+    core = model
+    pretrainer = None
+    if event_objective:
+        pretrainer = build_pretrainer(objective, model, cfg, layout).to(device)
+        model.config.pretrain_objective = objective      # saved in config.json
+    net = pretrainer if pretrainer is not None else model
+    n_params = sum(p.numel() for p in net.parameters())
 
     if distributed:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[local_rank] if device.type == "cuda" else None
+        net = torch.nn.parallel.DistributedDataParallel(
+            net, device_ids=[local_rank] if device.type == "cuda" else None,
+            # nppr / coles leave the language-model head unused.
+            find_unused_parameters=pretrainer is not None,
         )
-    core = model.module if distributed else model
 
     # -- Optimizer / schedule ------------------------------------------
     opt_cfg = dict(cfg.get("optimizer", {}) or {})
@@ -758,7 +826,7 @@ def train_bank_decoder(
     betas = tuple(opt_cfg.pop("betas", (0.9, 0.95)))
     weight_decay = float(opt_cfg.pop("weight_decay", 0.0))
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=base_lr, betas=betas, weight_decay=weight_decay, **opt_cfg
+        net.parameters(), lr=base_lr, betas=betas, weight_decay=weight_decay, **opt_cfg
     )
 
     steps_per_epoch = max(1, len(train_loader) // accum_steps)
@@ -804,7 +872,8 @@ def train_bank_decoder(
     field_batches = int(diag_cfg.get("field_loss_batches", 20) or 0)
     field_row_chunk = max(1, int(diag_cfg.get("field_loss_row_chunk", 4) or 4))
     field_names = diag_cfg.get("field_names") or None
-    want_field_loss = field_period > 1
+    # nppr reports its next-transfer head per field instead; coles has none.
+    want_field_loss = field_period > 1 and objective != "coles"
 
     # -- Checkpointing -------------------------------------------------
     ckpt_cfg = cfg.get("checkpoint", {}) or {}
@@ -837,6 +906,18 @@ def train_bank_decoder(
             print(f"  Objective    : masked-token prediction (mlm): "
                   f"{data_extra['mask_prob']:.0%} of {data_extra['mask_unit']}s hidden "
                   f"per sequence, <mask> = id {mask_token_id}")
+        elif objective == "nppr":
+            c_ = cfg.get("nppr") or {}
+            print(f"  Objective    : NPPR: next transfer + past reconstruction of "
+                  f"{int(c_.get('past_events', 8))} transfers back "
+                  f"(alpha {float(c_.get('alpha', 0.1)):g}, decay "
+                  f"{float(c_.get('decay_days', 60)):g} days)")
+        elif objective == "coles":
+            c_ = cfg.get("coles") or {}
+            print(f"  Objective    : CoLES: {data_extra['slices']} slices of "
+                  f"{data_extra['min_txns']}-{data_extra['max_txns']} transfers per sequence, "
+                  f"contrastive (margin {float(c_.get('margin', 0.5)):g}, "
+                  f"{int(c_.get('neg_count', 5))} hardest negatives)")
         else:
             print("  Objective    : next-token prediction (clm)")
         print(f"  Architecture : {core.config.model_type} "
@@ -875,6 +956,7 @@ def train_bank_decoder(
         "early_stop_step": None,   # step where validation stopped improving (decay starts)
         "objective": objective,
         "mask_unit": data_extra.get("mask_unit"),
+        "val_np_loss": [], "val_pr_loss": [],     # nppr: the two parts of val_loss
     }
 
     # ``step`` / ``val_loss`` are the true best seen; ``ckpt_step`` is the step
@@ -924,8 +1006,9 @@ def train_bank_decoder(
     def run_validation(step: int) -> Optional[float]:
         if val_loader is None:
             return None
-        model.eval()
+        net.eval()
         total, count = 0.0, 0
+        parts = {"np_loss": 0.0, "pr_loss": 0.0}
         f_sums = f_counts = None
         if want_field_loss:
             f_sums = torch.zeros(field_period, device=device, dtype=torch.float64)
@@ -935,6 +1018,20 @@ def train_bank_decoder(
             # No break on val_batches: the loader already covers exactly the
             # sampled subset built at setup.
             for i, batch in enumerate(val_loader):
+                if pretrainer is not None:
+                    with torch.autocast(**autocast_kwargs):
+                        out = net(**{k: v.to(device, non_blocking=True)
+                                     for k, v in batch.items()})
+                    total += out["loss"].detach().float().item()
+                    count += 1
+                    if objective == "nppr":
+                        parts["np_loss"] += float(out["np_loss"])
+                        parts["pr_loss"] += float(out["pr_loss"])
+                        if want_field_loss and (not field_batches or i < field_batches):
+                            nf = out["field_ce_sum"].numel()
+                            f_sums[:nf] += out["field_ce_sum"].double()
+                            f_counts[:nf] += out["field_count"].double()
+                    continue
                 input_ids = batch["input_ids"].to(device, non_blocking=True)
                 labels = batch["labels"].to(device, non_blocking=True)
                 with torch.autocast(**autocast_kwargs):
@@ -949,10 +1046,13 @@ def train_bank_decoder(
                 if want_field_loss and (not field_batches or i < field_batches):
                     accumulate_field_loss(out.logits, labels, f_sums, f_counts)
 
-        model.train()
+        net.train()
         if count == 0:
             return None
         mean = total / count
+        if objective == "nppr":
+            history["val_np_loss"].append(parts["np_loss"] / count)
+            history["val_pr_loss"].append(parts["pr_loss"] / count)
         if distributed:
             t = torch.tensor([mean], device=device)
             torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.AVG)
@@ -1049,8 +1149,14 @@ def train_bank_decoder(
             best["step"] = step
         if is_main:
             marker = "  <- best" if improved else ""
-            print(f"  step {step:>5}/{total_steps}  VAL loss {vloss:.4f}  "
-                  f"(ppl {math.exp(min(vloss, 20)):.1f}){marker}")
+            if objective == "nppr":
+                extra = (f"(next {history['val_np_loss'][-1]:.3f}, "
+                         f"past {history['val_pr_loss'][-1]:.3f})")
+            elif objective == "coles":
+                extra = ""
+            else:
+                extra = f"(ppl {math.exp(min(vloss, 20)):.1f})"
+            print(f"  step {step:>5}/{total_steps}  VAL loss {vloss:.4f}  {extra}{marker}")
         if improved and save_best:
             path = save_checkpoint(step, reason="best")
             if path:
@@ -1073,7 +1179,7 @@ def train_bank_decoder(
     es: Dict[str, Any] = {"val_loss": None, "bad": 0}   # early-stopping state
 
     # -- Loop ----------------------------------------------------------
-    model.train()
+    net.train()
     step = 0
     micro = 0
     running = 0.0
@@ -1087,20 +1193,27 @@ def train_bank_decoder(
             train_sampler.set_epoch(epoch)
 
         for batch in train_loader:
-            input_ids = batch["input_ids"].to(device, non_blocking=True)
-            labels = batch["labels"].to(device, non_blocking=True)
+            if pretrainer is not None:
+                batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+            else:
+                input_ids = batch["input_ids"].to(device, non_blocking=True)
+                labels = batch["labels"].to(device, non_blocking=True)
 
             with torch.autocast(**autocast_kwargs):
-                if token_weights is None:
-                    out = model(input_ids=input_ids,
+                if pretrainer is not None:
+                    step_loss = reported = net(**batch)["loss"]
+                elif token_weights is None:
+                    # Through ``net`` (the DDP wrapper when distributed): a forward that
+                    # bypasses DDP never averages the gradients across GPUs.
+                    out = net(input_ids=input_ids,
                                 attention_mask=batch_attention_mask(batch, labels),
                                 labels=labels)
                     step_loss = reported = out.loss
                 else:
                     # Field-weighted loss (loss_weights): trains on the weighted
                     # loss, reports the plain one (comparable with validation).
-                    out = model(input_ids=input_ids,
-                                attention_mask=batch_attention_mask(batch, labels))
+                    out = net(input_ids=input_ids,
+                              attention_mask=batch_attention_mask(batch, labels))
                     step_loss, reported = weighted_lm_loss(
                         out.logits, labels, token_weights, return_plain=True)
                 loss = step_loss / accum_steps
@@ -1113,7 +1226,7 @@ def train_bank_decoder(
                 continue
 
             if clip_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+                torch.nn.utils.clip_grad_norm_(net.parameters(), clip_grad_norm)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)

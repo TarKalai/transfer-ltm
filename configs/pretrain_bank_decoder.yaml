@@ -122,6 +122,33 @@ mlm:
   mask_unit: token
   val_mask_seed: 1234
 
+# -- NPPR (model.objective: nppr only; src/event_objectives.py) ---------------
+# Next event prediction and past reconstruction (Skalski et al. 2023). From the
+# state at the end of each transfer, one head predicts every field of the next
+# transfer, another rebuilds the past_events previous transfers from that state
+# and the time gap, weighted exp(-gap / decay_days). Gaps come from the TDIF bins.
+# loss = (1 - alpha) * next + alpha * past. decoder_hidden: width of both heads.
+nppr:
+  alpha: 0.1
+  past_events: 8
+  decay_days: 60
+  decoder_hidden: 512
+
+# -- CoLES (model.objective: coles only; src/event_objectives.py) -------------
+# Contrastive learning on slices (Babaev et al. 2022): `slices` random runs of
+# min_txns..max_txns consecutive transfers per sequence. A slice's vector is the
+# mean of its token states (unit length); slices of the same sequence are pulled
+# together, the neg_count closest slices of other sequences pushed beyond margin.
+# Sequences with fewer than min_txns transfers are left out. Validation uses fixed
+# slices (val_seed).
+coles:
+  slices: 5
+  min_txns: 8
+  max_txns: 64
+  margin: 0.5
+  neg_count: 5
+  val_seed: 1234
+
 # -- Training Dataset -----------------------------------------------------
 dataset:
   _target_: src/clm_data.py:build_bank_clm_dataset
