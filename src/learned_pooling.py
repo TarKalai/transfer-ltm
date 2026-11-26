@@ -75,7 +75,7 @@ class AttentionPoolingHead(nn.Module):
         # Start from uniform weights -- exactly mean pooling, which already
         # carries the signal -- and let training sharpen them. From a random
         # scorer the attention can lock onto the wrong transactions before the
-        # readout has learned anything (seen in verify_pooling_offline.py).
+        # readout has learned anything (seen on a synthetic task).
         nn.init.zeros_(self.scorer[-1].weight)
         nn.init.zeros_(self.scorer[-1].bias)
 
@@ -142,7 +142,7 @@ def train_head(states: np.ndarray, valid: np.ndarray, labels: np.ndarray,
     pooling) and only the readout trains. Otherwise the attention sharpens
     while the readout is still random, follows noise and locks onto the wrong
     transactions -- on a synthetic task, 2 of 5 seeds ended *below* plain mean
-    pooling that way (verify_pooling_offline.py).
+    pooling that way.
     """
     torch.manual_seed(seed)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")

@@ -51,14 +51,22 @@ Every command below is run from this folder.
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -r pyproject.toml
-uv pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+uv pip install torch==2.8.0
 uv pip install transformers==5.8.1
-uv pip install "cudf-cu12==25.6.*" --extra-index-url https://pypi.nvidia.com
+uv pip install "cudf-cu12==25.6.*" "numpy<2.3"
 ```
 
-The last three are installed separately because they come from their own download
-servers (PyTorch's and NVIDIA's). These are the versions the earlier runs used; if your
-previous workspace had another cuDF version (`uv pip list | grep cudf` there), use that one.
+`numpy<2.3`: cuDF's Numba supports NumPy up to 2.2, and `pyproject.toml` alone installs a
+newer one (the error is "Numba needs NumPy 2.2 or less").
+
+All three come from the normal PyPI: torch 2.8.0 there is the CUDA 12.8 build, and cuDF
+is on PyPI since 25.x (no need for NVIDIA's own server, which a run machine without
+internet cannot reach). These are the versions the earlier runs used; if your previous
+workspace had another cuDF version (`uv pip list | grep cudf` there), use that one. If
+cuDF still cannot be installed, download it on a machine with internet and upload it:
+`pip download "cudf-cu12==25.6.*" --platform manylinux_2_28_x86_64 --python-version 3.12
+--only-binary=:all: -d cudf_wheels`, then `uv pip install --find-links cudf_wheels
+"cudf-cu12==25.6.*"`.
 
 Check that it worked:
 

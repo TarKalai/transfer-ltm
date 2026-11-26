@@ -907,11 +907,16 @@ class BankTransferTokenizerPipeline(TokenizerPipeline):
         df[OPST_COL] = self._clean_str(df[s.operations_status])
         df[SIGN_COL] = self._clean_str(df[s.movement_sign])
         df[DC_COL] = self._clean_str(df[s.dc_flag])
-        df[CMT_COL] = df[s.comment_structure].fillna(-1).astype("int64")
+        df[CMT_COL] = self._code(df[s.comment_structure])
 
-        mvc = df[s.movement_code].fillna(-1).astype("int64")
+        mvc = self._code(df[s.movement_code])
         df[MVC_COL] = mvc
         if cfg.movement_group_divisor:
+            if mvc.dtype.kind not in "iu":
+                raise ValueError(
+                    f"movement_group_divisor needs numeric movement codes, but "
+                    f"{s.movement_code!r} has text codes; set movement_group_divisor=None"
+                )
             df[MVGRP_COL] = mvc // int(cfg.movement_group_divisor)
 
         # -- free text: raw; the text step cleans it (strategy-specific) --
@@ -1007,6 +1012,27 @@ class BankTransferTokenizerPipeline(TokenizerPipeline):
         if self.config.time_delta_first_token:
             return seconds
         return seconds.fillna(0)
+
+    @classmethod
+    def _code(cls, series):
+        """A code column (comment structure, movement code) for a frequency step.
+
+        Numeric columns: integers, missing -> -1 (as before). Text columns are
+        converted value by value, never as a whole, so every split gives the same
+        value the same token even if only some splits hold text codes: an
+        integer ("12", " 012") -> "12", the same token as the number 12; missing
+        or empty -> "-1", the same token as a missing number; anything else
+        ("A12", "12.5") -> the cleaned text. The step tokenizes the values as
+        categories either way.
+        """
+        if series.dtype.kind in "biuf":
+            return series.fillna(-1).astype("int64")
+        missing = series.isnull()
+        text = series.astype("str").fillna("").str.strip()
+        is_int = text.str.match(r"^-?[0-9]{1,18}$") & ~missing
+        as_int = text.where(is_int, "0").astype("int64").astype("str")
+        out = cls._clean_str(series).where(~is_int, as_int)
+        return out.where(~missing & (text != ""), "-1")
 
     @staticmethod
     def _to_float(series: cudf.Series) -> cudf.Series:

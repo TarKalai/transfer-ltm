@@ -108,12 +108,9 @@ Model sizes, early stopping, pooling, fine-tuning and the rest are switches in
 configs/         paths.yaml (where data and runs live), pretrain_bank_decoder.yaml
 experiments/     one YAML per experiment
 src/             tokenizer, corpus, training loop, inference, evaluation, experiment runner
-scripts/         run_experiment.py, data checks, helpers; verify_*_offline.py are tests
+scripts/         run_experiment.py, data checks, helpers
 docs/            getting started, every switch
 ```
-
-`scripts/verify_*_offline.py` test the code without a GPU or data (cuDF and, for most,
-torch are stubbed): `python scripts/verify_experiment_offline.py` and so on.
 
 ## License
 

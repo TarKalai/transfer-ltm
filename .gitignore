@@ -17,6 +17,9 @@ docs/run.md
 docs/backlog.md
 .claude/
 
+# Offline tests: run locally before handing code over, not part of the published code.
+scripts/verify_*_offline.py
+
 # Python / Jupyter
 __pycache__/
 *.py[cod]

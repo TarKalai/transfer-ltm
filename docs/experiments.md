@@ -256,7 +256,6 @@ name, then use that name in an experiment. Nothing else changes.
 A tokenizer-side strategy must also reload from a saved state (store only what
 `get_state()` needs), and old states must keep loading: give new config options a
 value in `BankTokenizerConfig.LEGACY_DEFAULTS` that reproduces the old behaviour.
-Add an offline check next to `scripts/verify_*_offline.py`.
 
 ## 5. Running on Domino as a job
 
